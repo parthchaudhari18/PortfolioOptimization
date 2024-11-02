@@ -1,0 +1,300 @@
+---
+title: "Optimizing Portfolios: A Simulation-Driven Approach to Risk and Return"
+author: "Parth Chaudhari (Group 1)"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    highlight: tango
+    number_sections: true
+    fig_caption: true
+    fig_height: 6
+    fig_width: 8
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE)
+```
+
+```{css, include = FALSE}
+pre code {
+  font-size: 9pt;
+}
+```
+
+# Introduction
+
+Portfolio optimization is a critical task for portfolio managers, aimed at finding the optimal weights of selected securities in a way that the resulting portfolio is mean-variance efficient. Unlike portfolio selection, which is concerned with choosing specific assets, portfolio optimization focuses on the optimal structuring of those assets to achieve the best risk-adjusted returns.
+
+This report explores a simulation-based approach to portfolio optimization. The simulation method generates random portfolio weights and evaluates them in mean-variance space. The optimal portfolio is identified as the one with the highest Sharpe ratio, representing the best return per unit of risk.
+
+## Objectives
+
+1. Calculate mean-variance metrics for a collection of selected stocks.
+2. Simulate multiple portfolios and identify the optimal and minimum variance portfolios.
+3. Plot simulated portfolios with the efficient frontier and capital market line (CML).
+4. Provide insights into the optimal portfolio configuration and its risk-return profile.
+
+# Data and Methodology
+
+### Stock Data
+
+The analysis uses monthly adjusted stock returns for the following tickers:
+
+- **General Electric (GE)**
+- **Exxon Mobil (XOM)**
+- **Greenbrier Companies (GBX)**
+- **Starbucks (SBUX)**
+- **Pfizer (PFE)**
+- **Honda Motor Company (HMC)**
+- **NVIDIA (NVDA)**
+
+The data spans from January 2014 to December 2017. Monthly returns were annualized to calculate mean returns and standard deviations.
+
+### Simulation Methodology
+
+We simulated **700 portfolios**, where each portfolio's weights were randomly generated and normalized to sum to 1. Key metrics were computed for each portfolio:
+
+- **Mean Return**: The weighted average of stock returns in each portfolio.
+- **Risk (Standard Deviation)**: The portfolio's overall volatility, derived from the covariance matrix of stock returns.
+- **Sharpe Ratio**: The risk-adjusted return of the portfolio, calculated as `(Mean Return - Risk-Free Rate) / Standard Deviation`.
+
+The risk-free rate for this analysis is set at **0.02 (2%)**.
+
+```{r, include=FALSE}
+library(quantmod)  # for getting stock data
+library(ggplot2)   # for plotting
+library(dplyr)     # for data manipulation
+```
+
+
+The function myMeanVarPort:
+
+- Retrieves historical stock returns for each selected stock.
+- Calculates annualized average returns, standard deviations, and covariance between assets.
+- Simulates multiple portfolios with random weights and computes mean return, risk, and Sharpe Ratio for each.
+- Identifies the optimal and minimum variance portfolios.
+- Plots the Efficient Frontier, Capital Market Line, and highlights optimal and minimum variance portfolios.
+
+```{r}
+myMeanVarPort <- function(tickers, start_date, end_date, rf_rate) {
+  set.seed(12)  # Ensures reproducibility
+  
+  # Step 1: Download stock data and calculate returns
+  stock_returns <- lapply(tickers, function(ticker) {
+    data <- getSymbols(ticker, src = 'yahoo', from = start_date, to = end_date, auto.assign = FALSE)
+    monthly_data <- to.monthly(data, indexAt = 'lastof', OHLC = FALSE)
+    monthly_returns <- na.omit(periodReturn(Ad(monthly_data), period = 'monthly', type = 'log'))
+    colnames(monthly_returns) <- ticker
+    return(monthly_returns)
+  })
+  
+  # Combine returns and calculate average and std dev (annualized)
+  returns_data <- do.call(merge, stock_returns)
+  avg_returns <- colMeans(returns_data) * 12  # Annualized mean returns
+  std_devs <- apply(returns_data, 2, sd) * sqrt(12)  # Annualized std dev
+  
+  # Create a summary table for stocks
+  stock_summary <- data.frame(
+    Ticker = tickers,
+    Avg_Annual_Return = avg_returns,
+    Annual_Std_Dev = std_devs
+  )
+  
+  # Calculate annualized covariance matrix
+  cov_matrix <- cov(returns_data) * 12
+  
+  # Step 2: Simulate portfolios with random weights
+  num_assets <- length(tickers)
+  num_portfolios <- 100 * num_assets
+  portfolio_means <- numeric(num_portfolios)
+  portfolio_risks <- numeric(num_portfolios)
+  portfolio_sharpe <- numeric(num_portfolios)
+  weights_matrix <- matrix(nrow = num_portfolios, ncol = num_assets)
+  
+  for (i in 1:num_portfolios) {
+    weights <- runif(num_assets)
+    weights <- weights / sum(weights)
+    
+    portfolio_means[i] <- sum(weights * avg_returns)
+    portfolio_risks[i] <- sqrt(t(weights) %*% cov_matrix %*% weights)
+    portfolio_sharpe[i] <- (portfolio_means[i] - rf_rate) / portfolio_risks[i]
+    weights_matrix[i, ] <- weights
+  }
+  
+  # Store portfolio data in a data frame
+  portfolio_data <- data.frame(
+    Mean_Return = portfolio_means,
+    Risk = portfolio_risks,
+    Sharpe_Ratio = portfolio_sharpe
+  )
+  portfolio_data <- cbind(portfolio_data, weights_matrix)
+  colnames(portfolio_data)[-(1:3)] <- tickers
+  
+  # Find the optimal and minimum variance portfolios
+  optimal_idx <- which.max(portfolio_data$Sharpe_Ratio)
+  min_var_idx <- which.min(portfolio_data$Risk)
+  optimal_portfolio <- portfolio_data[optimal_idx, ]
+  min_variance_portfolio <- portfolio_data[min_var_idx, ]
+  
+  # Efficient frontier
+  efficient_frontier <- portfolio_data %>%
+    arrange(Risk) %>%
+    filter(cummax(Mean_Return) == Mean_Return)
+  
+  # Capital Market Line (CML)
+  cml_slope <- (optimal_portfolio$Mean_Return - rf_rate) / optimal_portfolio$Risk
+  cml_x <- seq(0, max(portfolio_data$Risk), length.out = 100)
+  cml_y <- rf_rate + cml_slope * cml_x
+  
+  # Return results
+  return(list(
+    stock_summary = stock_summary,
+    optimal_portfolio = optimal_portfolio,
+    min_variance_portfolio = min_variance_portfolio,
+    efficient_frontier = efficient_frontier,
+    portfolio_data = portfolio_data,
+    cml_x = cml_x,
+    cml_y = cml_y
+  ))
+}
+
+```
+
+# Run Portfolio Optimization
+
+The stock tickers, risk-free rate, and date range are defined as inputs for the myMeanVarPort function. This initiates the process of gathering historical data, calculating risk-return metrics, and simulating various portfolio configurations. The function subsequently identifies the optimal and minimum variance portfolios, providing a foundation for analyzing portfolio choices along the efficient frontier.
+
+
+```{r}
+tickers <- c("GE", "XOM", "GBX", "SBUX", "PFE", "HMC", "NVDA")
+risk_free_rate <- 0.02
+results <- myMeanVarPort(tickers, '2014-01-01', '2017-12-31', risk_free_rate)
+```
+
+# Results
+
+## Stock Summary
+
+Below is a summary of the average annual returns and annualized standard deviations for each stock:
+
+```{r, echo=FALSE}
+knitr::kable(results$stock_summary, caption = "Stock Summary: Average Annual Returns and Standard Deviations")
+```
+
+**Insights:**
+
+**NVIDIA (NVDA)** had the highest average annual return of **63.98%** with an annualized standard deviation of **33.40%**, indicating high return but also high volatility.
+**General Electric (GE)** showed a negative average annual return of **-5.80%** and had an annualized standard deviation of **18.47%**.
+
+
+## Optimal Portfolio
+
+The optimal portfolio is the one with the highest Sharpe ratio, indicating the best risk-adjusted return. The table below provides details of the optimal portfolio's configuration, including its weights, mean return, risk, and Sharpe ratio.
+```{r, echo=FALSE}
+knitr::kable(results$optimal_portfolio, caption = "Optimal Portfolio: Highest Sharpe Ratio")
+```
+
+**Optimal Portfolio Statistics:**
+
+- Mean Return: 25.55%
+- Risk (Standard Deviation): 13.73%
+- Sharpe Ratio: 1.7154
+
+**Asset Weights:**
+
+- GE: 0.75%
+- XOM: 20.89%
+- GBX: 1.87%
+- SBUX: 33.52%
+- PFE: 7.64%
+- HMC: 3.92%
+- NVDA: 31.40%
+
+**Interpretation:**
+
+The optimal portfolio provides a mean return of approximately **25.55%** with a risk of **13.73%**, achieving a Sharpe ratio of **1.7154**. This portfolio configuration offers a balanced trade-off between risk and return, suitable for investors aiming for high returns with moderate risk exposure.
+
+## Minimum Variance Portfolio
+
+The minimum variance portfolio minimizes risk. Its configuration, mean return, risk, and Sharpe ratio are shown below:
+
+```{r, echo=FALSE}
+knitr::kable(results$min_variance_portfolio, caption = "Minimum Variance Portfolio: Lowest Risk")
+```
+
+**Minimum Variance Portfolio Statistics:**
+
+- Mean Return: 7.91%
+- Risk (Standard Deviation): 9.80%
+- Sharpe Ratio: 0.6026
+
+**Asset Weights:**
+
+- GE: 2.45%
+- XOM: 24.89%
+- GBX: 0.86%
+- SBUX: 27.44%
+- PFE: 17.52%
+- HMC: 22.45%
+- NVDA: 4.39%
+
+**Interpretation:**
+
+The minimum variance portfolio has the lowest risk at **9.80%** with a mean return of **7.91%**. Although it has a lower Sharpe ratio compared to the optimal portfolio, it is better suited for risk-averse investors who prioritize stability over high returns.
+
+## Efficient Frontier Portfolios
+
+The efficient frontier represents the set of portfolios that offer the highest return for a given level of risk. Portfolios on the efficient frontier are considered Pareto optimal in the mean-variance space.
+
+```{r, echo=FALSE}
+knitr::kable(results$efficient_frontier, caption = "Efficient Frontier Portfolios")
+```
+
+# Visualization of Portfolios
+
+The plot below shows all simulated portfolios, the efficient frontier, the Capital Market Line (CML), and highlights the optimal and minimum variance portfolios.
+
+```{r, fig.align='center', out.extra='width=0.8\\textwidth' }
+ggplot(results$portfolio_data, aes(x = Risk, y = Mean_Return)) +
+  geom_point(color = "blue", alpha = 0.5) +
+  geom_line(data = results$efficient_frontier, aes(x = Risk, y = Mean_Return), color = "green", linewidth = 1.2) +
+  annotate("point", x = results$optimal_portfolio$Risk, y = results$optimal_portfolio$Mean_Return, color = "red", size = 4) +
+  annotate("point", x = results$min_variance_portfolio$Risk, y = results$min_variance_portfolio$Mean_Return, color = "purple", size = 4) +
+  geom_line(data = data.frame(x = results$cml_x, y = results$cml_y), aes(x = x, y = y), color = "orange", linetype = "dashed", linewidth = 1) +
+  labs(title = "Simulated Portfolios: Risk vs. Return with Efficient Frontier and CML",
+       x = "Portfolio Risk (Standard Deviation)",
+       y = "Portfolio Mean Return") +
+  annotate("text", x = results$optimal_portfolio$Risk, y = results$optimal_portfolio$Mean_Return,
+           label = "Optimal Portfolio", color = "red", vjust = -1) +
+  annotate("text", x = results$min_variance_portfolio$Risk, y = results$min_variance_portfolio$Mean_Return,
+           label = "Min Variance Portfolio", color = "purple", vjust = -1) +
+  theme_minimal()
+
+
+```
+
+**Plot Analysis:**
+
+- **Blue Points:** Represent the simulated portfolios.
+- **Green Line:** The efficient frontier, showing the optimal portfolios for each risk level.
+- **Orange Dashed Line:** The Capital Market Line (CML), tangent to the efficient frontier at the optimal portfolio.
+- **Red Point:** Indicates the optimal portfolio, with the highest Sharpe ratio.
+- **Purple Point:** Indicates the minimum variance portfolio, with the lowest risk.
+
+
+**Discussion**
+
+The optimal portfolio identified in this analysis offers a balance between risk and return, maximizing the Sharpe ratio. Meanwhile, the minimum variance portfolio serves as a low-risk alternative. Investors can select an appropriate portfolio along the efficient frontier depending on their risk tolerance.
+
+The simulation-based approach to portfolio optimization is effective for generating insights into mean-variance efficiency without requiring closed-form solutions. However, it has limitations in precision and may need fine-tuning in real-world applications.
+
+# Conclusion
+
+This analysis demonstrates the application of portfolio optimization principles using a simulation approach. By evaluating portfolios in mean-variance space, we identified optimal and efficient portfolio configurations, which can serve as foundational strategies for investors with different risk preferences.
+
+Future analyses could extend this work by including additional constraints, such as transaction costs or minimum/maximum weights, to better reflect real-world conditions.
+
+# References
+
+The code used in this report is available on GitHub: [https://github.com/parthchaudhari18/PortfolioOptimization](https://github.com/parthchaudhari18/PortfolioOptimization).
